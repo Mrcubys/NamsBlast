@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import { router } from './server/routes';
 import { blastWorker } from './server/blastWorker';
 import { wsConnectionManager } from './server/wsServer';
+import { whatsappManager } from './server/whatsappManager';
 
 async function startServer() {
   const app = express();
@@ -39,6 +40,7 @@ async function startServer() {
 
   // Initialize Real-time WebSocket Server for WhatsApp Gateway
   wsConnectionManager.init(server);
+  whatsappManager.restorePersistedSessions();
 
   // Ensure blast worker is started
   blastWorker.start();

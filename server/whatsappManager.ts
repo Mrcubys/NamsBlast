@@ -29,6 +29,9 @@ export interface BotSession {
   errorMessage?: string;
   isConnecting: boolean;
   sessionDir: string;
+  reconnectAttempts: number;
+  reconnectTimer?: NodeJS.Timeout;
+  manualStop: boolean;
   stepLogs: Array<{ time: string; message: string; type: 'info' | 'success' | 'warning' | 'error' }>;
 }
 
@@ -84,6 +87,68 @@ class WhatsAppManager extends EventEmitter {
     return clean;
   }
 
+  private getSessionDir(userId: string, botId: string): string {
+    return path.join(this.authBaseDir, `user_${userId}_bot_${botId}`);
+  }
+
+  private getDisconnectStatusCode(error: unknown): number | undefined {
+    const disconnectError = error as {
+      output?: { statusCode?: number };
+      statusCode?: number;
+      status?: number;
+    } | null;
+
+    return (
+      disconnectError?.output?.statusCode ??
+      disconnectError?.statusCode ??
+      disconnectError?.status
+    );
+  }
+
+  private shouldReconnect(statusCode: number | undefined): boolean {
+    // These reasons require the user to authenticate again or indicate that
+    // the session is being used elsewhere. Retrying them forever causes
+    // connection flapping and can make a healthy session harder to recover.
+    const terminalReasons = [
+      DisconnectReason.loggedOut,
+      DisconnectReason.connectionReplaced,
+      DisconnectReason.badSession,
+      DisconnectReason.multideviceMismatch,
+    ];
+
+    return statusCode === undefined || !terminalReasons.includes(statusCode);
+  }
+
+  private getReconnectDelay(attempt: number): number {
+    // Back off to avoid hammering WhatsApp while still recovering quickly
+    // from short network interruptions.
+    return Math.min(30_000, 2_000 * 2 ** Math.min(attempt - 1, 4));
+  }
+
+  /**
+   * Restore sessions that have auth credentials on disk after a process
+   * restart. This keeps a deployment restart from forcing every user to
+   * scan a new QR code.
+   */
+  public restorePersistedSessions(): void {
+    for (const bot of db.getBots()) {
+      if (bot.status === 'OFFLINE') continue;
+
+      const sessionDir = this.getSessionDir(bot.userId, bot.id);
+      const credsFile = path.join(sessionDir, 'creds.json');
+      if (!fs.existsSync(credsFile)) continue;
+
+      this.initBotSocket(bot.id, bot.userId, {
+        authMethod: 'qr',
+        botName: bot.name,
+        resetAuth: false,
+        reconnectAttempt: 0,
+      }).catch((err: any) => {
+        console.error(`[WhatsApp Manager] Failed to restore bot ${bot.id}:`, err?.message || err);
+      });
+    }
+  }
+
   /**
    * Initialize an isolated WhatsApp Multi-Device session for a specific user and bot
    * Dynamically handles 'qr' or 'pairing_code' authentication methods.
@@ -101,6 +166,7 @@ class WhatsAppManager extends EventEmitter {
        * out permanently.
        */
       resetAuth?: boolean;
+      reconnectAttempt?: number;
     } = {}
   ): Promise<{
     bot: Bot;
@@ -112,7 +178,7 @@ class WhatsAppManager extends EventEmitter {
     const resetAuth = options.resetAuth !== false;
     
     // Per-user isolated authentication directory to secure credentials
-    const sessionDir = path.join(this.authBaseDir, `user_${userId}_bot_${botId}`);
+    const sessionDir = this.getSessionDir(userId, botId);
 
     // Explicitly requested fresh sessions (new connection / refresh QR) must
     // start clean. Automatic reconnects pass resetAuth=false so valid
@@ -131,11 +197,18 @@ class WhatsAppManager extends EventEmitter {
 
     // Terminate any existing socket instance for this bot
     const existing = this.sessions.get(botId);
-    if (existing?.sock) {
-      try {
-        existing.sock.end(undefined);
-      } catch (e) {
-        // safely ignore
+    if (existing) {
+      existing.manualStop = true;
+      if (existing.reconnectTimer) {
+        clearTimeout(existing.reconnectTimer);
+        existing.reconnectTimer = undefined;
+      }
+      if (existing.sock) {
+        try {
+          existing.sock.end(undefined);
+        } catch (e) {
+          // safely ignore
+        }
       }
     }
 
@@ -150,6 +223,8 @@ class WhatsAppManager extends EventEmitter {
       status: authMethod === 'pairing_code' ? 'PAIRING' : 'CONNECTING',
       isConnecting: true,
       sessionDir,
+      reconnectAttempts: options.reconnectAttempt || 0,
+      manualStop: false,
       stepLogs: [],
     };
     this.sessions.set(botId, sessionData);
@@ -235,8 +310,8 @@ class WhatsAppManager extends EventEmitter {
       }
 
       if (connection === 'close') {
-        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        const statusCode = this.getDisconnectStatusCode(lastDisconnect?.error);
+        const shouldReconnect = !sessionData.manualStop && this.shouldReconnect(statusCode);
 
         console.log(
           `[WhatsApp Manager] Connection closed for bot ${botId}. Status: ${statusCode}. Auto-reconnect: ${shouldReconnect}`
@@ -254,17 +329,36 @@ class WhatsAppManager extends EventEmitter {
         this.emit('disconnected', { botId, userId, statusCode, shouldReconnect });
 
         if (shouldReconnect && fs.existsSync(sessionDir)) {
-          setTimeout(() => {
-            if (this.sessions.has(botId)) {
-              this.initBotSocket(botId, userId, { ...options, resetAuth: false }).catch((err) =>
-                console.error(`[WhatsApp Manager] Auto-reconnect failed for bot ${botId}:`, err)
-              );
-            }
-          }, 6000);
+          const attempt = sessionData.reconnectAttempts + 1;
+          const delay = this.getReconnectDelay(attempt);
+          sessionData.reconnectAttempts = attempt;
+          this.addStepLog(
+            botId,
+            `Koneksi akan dicoba lagi dalam ${Math.round(delay / 1000)} detik (percobaan ${attempt}).`,
+            'info'
+          );
+
+          sessionData.reconnectTimer = setTimeout(() => {
+            sessionData.reconnectTimer = undefined;
+            if (this.sessions.get(botId) !== sessionData || sessionData.manualStop) return;
+
+            this.initBotSocket(botId, userId, {
+              ...options,
+              resetAuth: false,
+              reconnectAttempt: attempt,
+            }).catch((err) =>
+              console.error(`[WhatsApp Manager] Auto-reconnect failed for bot ${botId}:`, err)
+            );
+          }, delay);
         }
       } else if (connection === 'open') {
         // Status berubah menjadi 'CONNECTED' / 'ONLINE', amankan token sesi
         console.log(`[WhatsApp Manager] ✅ Bot ${botId} CONNECTED and authenticated! Token directory secured at ${sessionDir}`);
+        if (sessionData.reconnectTimer) {
+          clearTimeout(sessionData.reconnectTimer);
+          sessionData.reconnectTimer = undefined;
+        }
+        sessionData.reconnectAttempts = 0;
         sessionData.status = 'ONLINE';
         sessionData.isConnecting = false;
         sessionData.qrCodeUrl = null;
@@ -481,6 +575,11 @@ class WhatsAppManager extends EventEmitter {
   public async disconnectBot(botId: string): Promise<void> {
     const session = this.sessions.get(botId);
     if (session?.sock) {
+      session.manualStop = true;
+      if (session.reconnectTimer) {
+        clearTimeout(session.reconnectTimer);
+        session.reconnectTimer = undefined;
+      }
       try {
         session.sock.end(undefined);
       } catch (e) {
