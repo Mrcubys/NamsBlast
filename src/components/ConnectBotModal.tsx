@@ -373,7 +373,7 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
                   }`}
                 >
                   <KeyRound className="w-4 h-4" />
-                  <span>Kode Pairing (8 Digit)</span>
+                  <span>Kode Pairing (8 Karakter)</span>
                 </button>
                 <button
                   type="button"
@@ -442,7 +442,7 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
                   <li>Ketuk Menu (titik tiga) atau Pengaturan &gt; <b>Perangkat Tertaut</b>.</li>
                   <li>
                     {tab === 'pairing' ? (
-                      <span>Pilih <b>&quot;Tautkan dengan nomor telepon saja&quot;</b> lalu masukkan 8-digit kode pairing.</span>
+                      <span>Pilih <b>&quot;Tautkan dengan nomor telepon saja&quot;</b> lalu masukkan kode pairing 8 karakter.</span>
                     ) : (
                       <span>Pilih <b>&quot;Tautkan Perangkat&quot;</b> lalu scan QR Code unik yang tampil di layar.</span>
                     )}
@@ -465,7 +465,7 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
                 ) : tab === 'pairing' ? (
                   <>
                     <KeyRound className="w-4 h-4" />
-                    <span>Dapatkan Kode Pairing 8-Digit</span>
+                    <span>Dapatkan Kode Pairing 8-Karakter</span>
                   </>
                 ) : (
                   <>

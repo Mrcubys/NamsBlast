@@ -95,6 +95,12 @@ class WhatsAppManager extends EventEmitter {
       authMethod?: AuthMethod;
       phoneNumber?: string;
       botName?: string;
+      /**
+       * Fresh connection flows should clear old auth state. Automatic
+       * reconnects must keep it or a temporary disconnect will log the user
+       * out permanently.
+       */
+      resetAuth?: boolean;
     } = {}
   ): Promise<{
     bot: Bot;
@@ -103,19 +109,19 @@ class WhatsAppManager extends EventEmitter {
     pairingCode?: string;
   }> {
     const authMethod: AuthMethod = options.authMethod || (options.phoneNumber ? 'pairing_code' : 'qr');
+    const resetAuth = options.resetAuth !== false;
     
     // Per-user isolated authentication directory to secure credentials
     const sessionDir = path.join(this.authBaseDir, `user_${userId}_bot_${botId}`);
 
-    // If starting a fresh session and bot is not yet online, clean prior stale temporary auth artifacts to guarantee a 100% unique session QR/pairing
-    const existingBot = db.getBotById(botId);
-    if (!existingBot || existingBot.status !== 'ONLINE') {
-      if (fs.existsSync(sessionDir)) {
-        try {
-          fs.rmSync(sessionDir, { recursive: true, force: true });
-        } catch (e) {
-          // ignore
-        }
+    // Explicitly requested fresh sessions (new connection / refresh QR) must
+    // start clean. Automatic reconnects pass resetAuth=false so valid
+    // credentials are never deleted during a transient network failure.
+    if (resetAuth && fs.existsSync(sessionDir)) {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (e) {
+        throw new Error('Gagal membersihkan sesi WhatsApp lama sebelum membuat koneksi baru.');
       }
     }
 
@@ -190,10 +196,19 @@ class WhatsAppManager extends EventEmitter {
 
     // Handle connection lifecycle (QR streaming, authenticated open, disconnect)
     sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
+      // A refresh/new connection can replace this socket while the old one is
+      // still emitting close/open events. Ignore stale events so an old
+      // socket cannot overwrite the new session state or trigger reconnects.
+      if (this.sessions.get(botId) !== sessionData) {
+        return;
+      }
+
       const { connection, lastDisconnect, qr } = update;
 
-      // JIKA authMethod == 'qr': Ambil string QR mentah, konversi ke data-URI image
-      if (qr) {
+      // QR is only a user-facing auth method. Baileys may emit an internal QR
+      // update while preparing a pairing-code session; never expose that as
+      // the selected auth flow.
+      if (qr && authMethod === 'qr') {
         console.log(`[WhatsApp Manager] Raw Baileys QR received for bot ${botId}`);
         try {
           const qrDataUrl = await QRCode.toDataURL(qr, {
@@ -241,7 +256,7 @@ class WhatsAppManager extends EventEmitter {
         if (shouldReconnect && fs.existsSync(sessionDir)) {
           setTimeout(() => {
             if (this.sessions.has(botId)) {
-              this.initBotSocket(botId, userId, options).catch((err) =>
+              this.initBotSocket(botId, userId, { ...options, resetAuth: false }).catch((err) =>
                 console.error(`[WhatsApp Manager] Auto-reconnect failed for bot ${botId}:`, err)
               );
             }
@@ -273,10 +288,16 @@ class WhatsAppManager extends EventEmitter {
       }
     });
 
-    // JIKA authMethod == 'pairing_code': format nomor internasional, requestPairingCode via Baileys
+    // Pairing codes must come from WhatsApp/Baileys. Never generate a local
+    // fallback: a fabricated code looks valid but can never be accepted by
+    // the WhatsApp mobile app.
     let generatedPairingCode: string | undefined = undefined;
     if (authMethod === 'pairing_code' && options.phoneNumber && !state.creds.registered) {
       const internationalPhone = this.formatInternationalPhone(options.phoneNumber);
+      if (!/^62\d{8,13}$/.test(internationalPhone)) {
+        throw new Error('Nomor WhatsApp tidak valid. Gunakan format 08123456789 atau 628123456789.');
+      }
+
       console.log(`[WhatsApp Manager] Requesting genuine Baileys pairing code for phone: ${internationalPhone}`);
       this.addStepLog(botId, `Mengirim permintaan kode pairing 8-digit untuk nomor ${internationalPhone}...`, 'info');
 
@@ -285,7 +306,7 @@ class WhatsAppManager extends EventEmitter {
 
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 2000 : 1500));
+          await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 3000 : 2000));
           rawCode = await sock.requestPairingCode(internationalPhone);
           if (rawCode) break;
         } catch (pairErr: any) {
@@ -295,22 +316,50 @@ class WhatsAppManager extends EventEmitter {
       }
 
       if (!rawCode) {
-        // Safe pairing fallback generator to ensure seamless user flow
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        let code = '';
-        for (let i = 0; i < 8; i++) {
-          code += chars.charAt(Math.floor(Math.random() * chars.length));
+        const reason = lastError?.message ? ` Detail: ${lastError.message}` : '';
+        const errorMessage = `WhatsApp tidak mengeluarkan kode pairing asli setelah 3 percobaan.${reason}`;
+        sessionData.status = 'OFFLINE';
+        sessionData.isConnecting = false;
+        db.updateBot(botId, {
+          status: 'OFFLINE',
+          isRunning: false,
+          pairingCode: null,
+        });
+        this.addStepLog(botId, errorMessage, 'error');
+        this.sessions.delete(botId);
+        try {
+          sock.end(undefined);
+        } catch {
+          // The socket is already unusable; the request still returns the
+          // actionable pairing error below.
         }
-        rawCode = code;
-        console.log(`[WhatsApp Manager] Generated reliable pairing code: ${rawCode}`);
+        throw new Error(errorMessage);
       }
 
       if (rawCode) {
-        // Format 8-character code as XXXX-XXXX (e.g. 1234-5678 or ABCD-EFGH)
-        const formattedCode =
-          rawCode.length >= 8
-            ? `${rawCode.substring(0, 4)}-${rawCode.substring(4, 8)}`
-            : rawCode;
+        // Baileys returns an 8-character code. Normalize only its display
+        // formatting; never alter the actual code contents or invent one.
+        const normalizedCode = rawCode.replace(/[^a-z0-9]/gi, '').toUpperCase();
+        if (normalizedCode.length !== 8) {
+          const errorMessage = 'WhatsApp mengembalikan kode pairing dengan format yang tidak valid. Silakan coba lagi.';
+          sessionData.status = 'OFFLINE';
+          sessionData.isConnecting = false;
+          db.updateBot(botId, {
+            status: 'OFFLINE',
+            isRunning: false,
+            pairingCode: null,
+          });
+          this.addStepLog(botId, errorMessage, 'error');
+          this.sessions.delete(botId);
+          try {
+            sock.end(undefined);
+          } catch {
+            // Ignore cleanup errors and return the validation error.
+          }
+          throw new Error(errorMessage);
+        }
+
+        const formattedCode = `${normalizedCode.substring(0, 4)}-${normalizedCode.substring(4, 8)}`;
 
         sessionData.pairingCode = formattedCode;
         generatedPairingCode = formattedCode;
@@ -369,15 +418,14 @@ class WhatsAppManager extends EventEmitter {
       } catch (sendErr: any) {
         console.error(`[WhatsApp Manager] Socket dispatch notice:`, sendErr?.message || sendErr);
         return {
-          success: true,
-          messageId: `wa_${Date.now()}`,
+          success: false,
+          error: sendErr?.message || 'Pesan gagal dikirim melalui WhatsApp.',
         };
       }
     } else {
-      console.log(`[WhatsApp Manager] Bot ${botId} dispatched to ${jid}`);
       return {
-        success: true,
-        messageId: `wa_disp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        success: false,
+        error: 'WhatsApp belum online. Hubungkan kembali sebelum mengirim pesan.',
       };
     }
   }
@@ -397,7 +445,7 @@ class WhatsAppManager extends EventEmitter {
     const result = await this.initBotSocket(botId, userId || existing.userId, {
       authMethod: 'qr',
       botName: existing.name,
-      phoneNumber: existing.phone,
+      resetAuth: true,
     });
 
     return {
@@ -411,9 +459,8 @@ class WhatsAppManager extends EventEmitter {
    */
   public async verifyAndActivateBot(botId: string): Promise<Bot | null> {
     const session = this.sessions.get(botId);
-    if (session) {
-      session.status = 'ONLINE';
-      session.isConnecting = false;
+    if (!session?.sock || session.status !== 'ONLINE') {
+      throw new Error('WhatsApp belum terhubung. Selesaikan scan QR atau masukkan kode pairing terlebih dahulu.');
     }
 
     const updated = db.updateBot(botId, {

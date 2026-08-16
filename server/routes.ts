@@ -490,13 +490,19 @@ router.post('/bots/:id/verify-connect', async (req, res) => {
     return res.status(404).json({ error: 'WhatsApp tidak ditemukan.' });
   }
 
-  const updated = await whatsappManager.verifyAndActivateBot(id);
+  try {
+    const updated = await whatsappManager.verifyAndActivateBot(id);
 
-  return res.json({
-    success: true,
-    message: 'WhatsApp berhasil diverifikasi dan terhubung secara online! Tekan tombol "Mulai" untuk mulai menghasilkan saldo.',
-    bot: updated || bot,
-  });
+    return res.json({
+      success: true,
+      message: 'WhatsApp berhasil diverifikasi dan terhubung secara online! Tekan tombol "Mulai" untuk mulai menghasilkan saldo.',
+      bot: updated || bot,
+    });
+  } catch (err: any) {
+    return res.status(409).json({
+      error: err?.message || 'WhatsApp belum terhubung.',
+    });
+  }
 });
 
 // Start Bot Blasting
@@ -550,15 +556,21 @@ router.post('/bots/:id/reconnect', async (req, res) => {
 
   try {
     await whatsappManager.initBotSocket(id, bot.userId, {
-      phoneNumber: bot.phone,
+      // Reconnect with the saved auth state. Do not infer pairing mode from
+      // the stored phone number: that made QR sessions request a new pairing
+      // code and forced users to enter a number unexpectedly.
+      authMethod: 'qr',
+      resetAuth: false,
       botName: bot.name,
     });
-  } catch (e) {
+  } catch (e: any) {
     console.error('Reconnect error:', e);
+    return res.status(500).json({
+      error: e?.message || 'WhatsApp gagal disambungkan ulang.',
+    });
   }
 
   const updated = db.updateBot(id, {
-    status: 'ONLINE',
     isRunning: false,
     lastActive: new Date().toISOString(),
   });
