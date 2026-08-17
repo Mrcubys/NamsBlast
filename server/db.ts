@@ -85,6 +85,9 @@ class Database {
         if (!this.data.chatMessages) {
           this.data.chatMessages = [];
         }
+        if (this.removeSeededDemoData()) {
+          this.save();
+        }
       } else {
         this.seedInitialData();
         this.save();
@@ -98,7 +101,6 @@ class Database {
   private seedInitialData() {
     this.data.adminPassword = 'namsblast2026';
     const adminPassHash = bcrypt.hashSync('admin123', 10);
-    const userPassHash = bcrypt.hashSync('user123', 10);
 
     const adminUser: User = {
       id: 'usr-admin-1',
@@ -113,53 +115,6 @@ class Database {
       totalMessagesSent: 0,
       createdAt: new Date().toISOString(),
     };
-
-    const demoUser: User = {
-      id: 'usr-user-1',
-      email: 'user@namsblast.com',
-      name: 'Budi Santoso',
-      role: 'USER',
-      referralCode: 'nams8291',
-      referredByUserId: null,
-      balance: 45750,
-      totalEarned: 128500,
-      totalReferralEarned: 15400,
-      totalMessagesSent: 2570,
-      createdAt: new Date(Date.now() - 86400000 * 7).toISOString(),
-    };
-
-    const demoDownline: User = {
-      id: 'usr-user-2',
-      email: 'downline@namsblast.com',
-      name: 'Ahmad Rizky',
-      role: 'USER',
-      referralCode: 'nams3041',
-      referredByUserId: 'usr-user-1',
-      balance: 15200,
-      totalEarned: 45000,
-      totalReferralEarned: 0,
-      totalMessagesSent: 900,
-      createdAt: new Date(Date.now() - 86400000 * 3).toISOString(),
-    };
-
-    const demoBots: Bot[] = [
-      {
-        id: 'bot-1',
-        userId: 'usr-user-1',
-        phone: '6281234567890',
-        name: 'WhatsApp Bisnis Utama',
-        status: 'ONLINE',
-        speed: 'FAST',
-        isRunning: false, // User starts it manually
-        lastActive: new Date().toISOString(),
-        totalSent: 1640,
-        totalFailed: 12,
-        batteryLevel: 92,
-        pushName: 'Budi Store CS',
-        createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-        currentTask: null,
-      },
-    ];
 
     const templates: MessageTemplate[] = [
       {
@@ -182,25 +137,7 @@ class Database {
       },
     ];
 
-    // Seed initial contacts
-    const sampleNames = ['Andi', 'Siti', 'Budi', 'Rina', 'Dewi', 'Hendra', 'Maya', 'Fajar', 'Putri', 'Dimas', 'Eka', 'Bayu', 'Ratna', 'Agus', 'Lestari'];
     const contacts: Contact[] = [];
-    for (let i = 1; i <= 350; i++) {
-      const randomPrefix = ['0812', '0813', '0821', '0857', '0878', '0896'][i % 6];
-      const randomSuffix = String(1000000 + i * 37).slice(-7);
-      const name = sampleNames[i % sampleNames.length] + ' ' + (i % 20 === 0 ? 'Kusuma' : '');
-      contacts.push({
-        id: `cnt-${i}`,
-        phone: `${randomPrefix}${randomSuffix}`,
-        name: name.trim(),
-        status: i <= 20 ? 'sent' : 'pending',
-        assignedBotId: i <= 20 ? 'bot-1' : null,
-        sentAt: i <= 20 ? new Date(Date.now() - i * 60000).toISOString() : null,
-        errorMessage: null,
-        batchId: 'batch-initial-01',
-        createdAt: new Date().toISOString(),
-      });
-    }
 
     const announcements: Announcement[] = [
       {
@@ -286,13 +223,11 @@ class Database {
     ];
 
     this.data = {
-      users: [adminUser, demoUser, demoDownline],
+      users: [adminUser],
       passwords: {
         'usr-admin-1': adminPassHash,
-        'usr-user-1': userPassHash,
-        'usr-user-2': userPassHash,
       },
-      bots: demoBots,
+      bots: [],
       contacts,
       templates,
       sentLogs: [],
@@ -301,6 +236,50 @@ class Database {
       settings: DEFAULT_SETTINGS,
       chatMessages,
     };
+  }
+
+  private removeSeededDemoData(): boolean {
+    const demoUserIds = new Set(['usr-user-1', 'usr-user-2']);
+    const demoEmails = new Set(['user@namsblast.com', 'downline@namsblast.com']);
+    const demoBotIds = new Set(['bot-1']);
+    const originalUsers = this.data.users.length;
+    const originalBots = this.data.bots.length;
+    const originalContacts = this.data.contacts.length;
+    const originalLogs = this.data.sentLogs.length;
+    const originalWithdrawals = this.data.withdrawRequests.length;
+    const originalChats = this.data.chatMessages.length;
+
+    this.data.users = this.data.users.filter(
+      (user) => !demoUserIds.has(user.id) && !demoEmails.has(user.email.toLowerCase())
+    );
+    for (const userId of demoUserIds) {
+      delete this.data.passwords[userId];
+    }
+
+    this.data.bots = this.data.bots.filter(
+      (bot) => !demoBotIds.has(bot.id) && !demoUserIds.has(bot.userId)
+    );
+    this.data.contacts = this.data.contacts.filter(
+      (contact) => !demoBotIds.has(contact.assignedBotId || '')
+    );
+    this.data.sentLogs = this.data.sentLogs.filter(
+      (log) => !demoBotIds.has(log.botId) && !demoUserIds.has(log.userId)
+    );
+    this.data.withdrawRequests = this.data.withdrawRequests.filter(
+      (request) => !demoUserIds.has(request.userId)
+    );
+    this.data.chatMessages = this.data.chatMessages.filter(
+      (message) => !demoUserIds.has(message.userId)
+    );
+
+    return (
+      originalUsers !== this.data.users.length ||
+      originalBots !== this.data.bots.length ||
+      originalContacts !== this.data.contacts.length ||
+      originalLogs !== this.data.sentLogs.length ||
+      originalWithdrawals !== this.data.withdrawRequests.length ||
+      originalChats !== this.data.chatMessages.length
+    );
   }
 
   public save() {

@@ -1,23 +1,10 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import QRCode from 'qrcode';
 import { db, generateReferralCode } from './db';
 import { Bot, Contact, MessageTemplate, WithdrawRequest, Announcement, User } from '../src/types';
 import { whatsappManager } from './whatsappManager';
 
 export const router = Router();
-
-// Helper for 8-digit pairing code
-function generatePairingCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let part1 = '';
-  let part2 = '';
-  for (let i = 0; i < 4; i++) {
-    part1 += chars.charAt(Math.floor(Math.random() * chars.length));
-    part2 += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return `${part1}-${part2}`;
-}
 
 // ==========================================
 // 1. AUTHENTICATION
@@ -213,28 +200,31 @@ router.get('/bots', (req, res) => {
   return res.json({ bots: userBots });
 });
 
-// Dynamic Unified WhatsApp Connection Endpoint (Supports 'qr' and 'pairing_code')
+// Unified WhatsApp connection endpoint. QR is the default and never needs a
+// phone number; pairing_code is optional and explicitly requires one.
 router.post('/bots/connect', async (req, res) => {
+  let createdBotId: string | undefined;
   try {
     const userId = (req.headers['x-user-id'] as string) || req.body.userId;
-    const { name, phoneNumber, phone, authMethod = 'pairing_code' } = req.body;
+    const { name, phoneNumber, phone, authMethod = 'qr' } = req.body;
     if (!userId) return res.status(401).json({ error: 'Unauthorized: User ID diperlukan.' });
 
     const rawPhone = phoneNumber || phone || '';
-    const cleanPhone = rawPhone ? whatsappManager.formatInternationalPhone(rawPhone) : `628${Math.floor(100000000 + Math.random() * 900000000)}`;
-    const targetAuthMethod = authMethod === 'qr' ? 'qr' : 'pairing_code';
+    const targetAuthMethod = authMethod === 'pairing_code' ? 'pairing_code' : 'qr';
+    const cleanPhone = rawPhone ? whatsappManager.formatInternationalPhone(rawPhone) : '';
 
-    if (targetAuthMethod === 'pairing_code' && (!rawPhone || rawPhone.length < 8)) {
+    if (targetAuthMethod === 'pairing_code' && !/^62\d{8,13}$/.test(cleanPhone)) {
       return res.status(400).json({ error: 'Nomor WhatsApp internasional valid wajib diisi untuk metode Pairing Code.' });
     }
 
     const botId = `bot-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+    createdBotId = botId;
 
     const newBot: Bot = {
       id: botId,
       userId,
       phone: cleanPhone,
-      name: name?.trim() || `WhatsApp (${cleanPhone})`,
+      name: name?.trim() || 'WhatsApp Multi-Device',
       status: targetAuthMethod === 'pairing_code' ? 'PAIRING' : 'CONNECTING',
       speed: 'FAST',
       isRunning: false,
@@ -244,7 +234,7 @@ router.post('/bots/connect', async (req, res) => {
       totalSent: 0,
       totalFailed: 0,
       batteryLevel: 95,
-      pushName: name || `WhatsApp ${cleanPhone}`,
+      pushName: name || 'WhatsApp Multi-Device',
       createdAt: new Date().toISOString(),
       currentTask: null,
     };
@@ -254,7 +244,7 @@ router.post('/bots/connect', async (req, res) => {
     // Initialize isolated WhatsApp Multi-Device session
     const result = await whatsappManager.initBotSocket(botId, userId, {
       authMethod: targetAuthMethod,
-      phoneNumber: cleanPhone,
+      phoneNumber: targetAuthMethod === 'pairing_code' ? cleanPhone : undefined,
       botName: name?.trim(),
     });
 
@@ -270,106 +260,16 @@ router.post('/bots/connect', async (req, res) => {
     });
   } catch (err: any) {
     console.error('[Route /bots/connect] Error:', err);
+    if (createdBotId) {
+      try {
+        await whatsappManager.disconnectBot(createdBotId);
+      } catch {
+        // The socket may not have finished initializing; remove the DB row
+        // below regardless so failed attempts never create ghost bots.
+      }
+      db.deleteBot(createdBotId);
+    }
     return res.status(500).json({ error: err.message || 'Gagal menginisialisasi sesi WhatsApp.' });
-  }
-});
-
-// Generate QR Code session for bot connection
-router.post('/bots/connect-qr', async (req, res) => {
-  try {
-    const userId = req.headers['x-user-id'] as string;
-    const { name, phone } = req.body;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-    const botId = `bot-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
-    const cleanPhone = phone ? whatsappManager.formatInternationalPhone(phone) : `628${Math.floor(100000000 + Math.random() * 900000000)}`;
-
-    const newBot: Bot = {
-      id: botId,
-      userId,
-      phone: cleanPhone,
-      name: name?.trim() || `WhatsApp Aktif #${db.getBotsByUserId(userId).length + 1}`,
-      status: 'CONNECTING',
-      speed: 'FAST',
-      isRunning: false,
-      qrCodeData: null,
-      pairingCode: null,
-      lastActive: new Date().toISOString(),
-      totalSent: 0,
-      totalFailed: 0,
-      batteryLevel: 95,
-      pushName: name || 'NamsBlast WhatsApp Web',
-      createdAt: new Date().toISOString(),
-      currentTask: null,
-    };
-
-    db.createBot(newBot);
-
-    // Initialize real WhatsApp multi-device Baileys socket for QR
-    const result = await whatsappManager.initBotSocket(botId, userId, {
-      authMethod: 'qr',
-      phoneNumber: cleanPhone,
-      botName: name?.trim(),
-    });
-
-    return res.json({
-      success: true,
-      bot: result.bot || newBot,
-      qrDataUrl: result.qrDataUrl,
-      message: 'Sesi WhatsApp QR Code berhasil dibuka. Silakan scan melalui WhatsApp di ponsel Anda.',
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// Generate 8-Digit Pairing Code for bot connection
-router.post('/bots/connect-pairing', async (req, res) => {
-  try {
-    const userId = req.headers['x-user-id'] as string;
-    const { name, phone } = req.body;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-    if (!phone) return res.status(400).json({ error: 'Nomor WhatsApp wajib diisi.' });
-
-    const cleanPhone = whatsappManager.formatInternationalPhone(phone);
-    const botId = `bot-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
-
-    const newBot: Bot = {
-      id: botId,
-      userId,
-      phone: cleanPhone,
-      name: name?.trim() || `WhatsApp (${cleanPhone})`,
-      status: 'PAIRING',
-      speed: 'FAST',
-      isRunning: false,
-      qrCodeData: null,
-      pairingCode: null,
-      lastActive: new Date().toISOString(),
-      totalSent: 0,
-      totalFailed: 0,
-      batteryLevel: 90,
-      pushName: name || `WhatsApp ${cleanPhone}`,
-      createdAt: new Date().toISOString(),
-      currentTask: null,
-    };
-
-    db.createBot(newBot);
-
-    // Initialize real WhatsApp multi-device Baileys socket for Pairing Code
-    const result = await whatsappManager.initBotSocket(botId, userId, {
-      authMethod: 'pairing_code',
-      phoneNumber: cleanPhone,
-      botName: name?.trim(),
-    });
-
-    return res.json({
-      success: true,
-      bot: result.bot || newBot,
-      pairingCode: result.pairingCode,
-      message: 'Kode pairing 8-digit WhatsApp berhasil dibuat. Masukkan kode pada WhatsApp Anda.',
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
   }
 });
 

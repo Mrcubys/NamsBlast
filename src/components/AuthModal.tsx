@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Mail, Lock, User as UserIcon, Gift, ArrowRight, Check, AlertCircle } from 'lucide-react';
+import { X, Mail, Lock, User as UserIcon, Gift, ArrowRight, AlertCircle } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { User } from '../types';
 
@@ -86,20 +86,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     } catch (err: any) {
       setError(err.message || 'Terjadi kesalahan saat otentikasi.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleQuickDemoLogin = async (demoEmail: string, demoPass: string) => {
-    setError(null);
-    setLoading(true);
-    try {
-      const res = await ApiService.login({ email: demoEmail, password: demoPass });
-      onAuthSuccess(res.user);
-      onClose();
-    } catch (err: any) {
-      setError(err.message || 'Gagal login akun demo');
     } finally {
       setLoading(false);
     }
@@ -273,30 +259,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </form>
 
-        {/* Quick Demo Credentials Assistant */}
-        <div className="mt-4 pt-3.5 border-t border-slate-100 text-center">
-          <p className="text-[11px] text-slate-400 font-medium mb-2">
-            Atau gunakan akun siap pakai (Demo / Pengujian):
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin('user@namsblast.com', 'user123')}
-              disabled={loading}
-              className="py-1.5 px-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-semibold text-slate-700 transition flex items-center justify-center gap-1"
-            >
-              <span>👤 User Demo</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin('admin@namsblast.com', 'admin123')}
-              disabled={loading}
-              className="py-1.5 px-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-[11px] font-semibold text-emerald-800 transition flex items-center justify-center gap-1"
-            >
-              <span>🛡️ Admin Demo</span>
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

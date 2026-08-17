@@ -33,7 +33,7 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
   currentUser,
   onBotConnected,
 }) => {
-  const [tab, setTab] = useState<'qr' | 'pairing'>('pairing');
+  const [tab, setTab] = useState<'qr' | 'pairing'>('qr');
   const [botName, setBotName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -48,8 +48,6 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
   const [countdown, setCountdown] = useState<number>(60);
   const [isVerifying, setIsVerifying] = useState(false);
   const [connectedSuccess, setConnectedSuccess] = useState(false);
-  const [deviceDetected, setDeviceDetected] = useState(false);
-  const [isLiveConnected, setIsLiveConnected] = useState(true);
 
   // Step-by-Step Verification Logs
   const [stepLogs, setStepLogs] = useState<StepLogItem[]>([]);
@@ -77,12 +75,10 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
       setQrCodeData(null);
       setPairingCode(null);
       setConnectedSuccess(false);
-      setDeviceDetected(false);
       setStepLogs([]);
       setBotName(`WhatsApp ${currentUser?.name || 'Saya'}`);
       setPhoneNumber('');
       setCountdown(60);
-      setIsLiveConnected(true);
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, currentUser]);
@@ -97,9 +93,6 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
             addLocalLog('Sesi QR telah habis waktu. Anda dapat mengklik "Perbarui QR Baru".', 'warning');
           }
           return 0;
-        }
-        if (prev === 55 || prev === 30) {
-          setDeviceDetected(true);
         }
         return prev - 1;
       });
@@ -173,7 +166,6 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
     const pollInterval = setInterval(async () => {
       try {
         const res = await ApiService.getBotStatus(activeBot.id);
-        setIsLiveConnected(true);
         if (res.stepLogs && res.stepLogs.length > 0) {
           setStepLogs(res.stepLogs);
         }
@@ -216,15 +208,14 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
 
     setLoading(true);
     setError(null);
-    setDeviceDetected(false);
     setStepLogs([]);
     addLocalLog(`Membuat sesi gateway unik [${selectedMethod.toUpperCase()}] dengan enkripsi end-to-end...`, 'info');
 
     try {
       const res = await whatsappEngine.startSession(currentUser.id, {
         authMethod: selectedMethod,
-        phoneNumber: cleanPhone || undefined,
-        name: botName.trim() || (selectedMethod === 'pairing_code' ? `WhatsApp (${cleanPhone})` : 'WhatsApp Sesi Utama'),
+        phoneNumber: selectedMethod === 'pairing_code' ? cleanPhone : undefined,
+        name: botName.trim() || (selectedMethod === 'pairing_code' ? `WhatsApp (${cleanPhone})` : 'WhatsApp Multi-Device'),
       });
 
       setActiveBot(res.bot);
@@ -584,17 +575,8 @@ export const ConnectBotModal: React.FC<ConnectBotModalProps> = ({
 
               {/* Status Indicator */}
               <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center justify-center space-x-2">
-                {deviceDetected ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 animate-bounce" />
-                    <span className="font-bold">Sinyal Handshake WhatsApp Terdeteksi! Menghubungkan...</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-4 h-4 text-emerald-600 dark:text-emerald-400 animate-spin" />
-                    <span>Menunggu otentikasi dari aplikasi WhatsApp di HP Anda...</span>
-                  </>
-                )}
+                <RefreshCw className="w-4 h-4 text-emerald-600 dark:text-emerald-400 animate-spin" />
+                <span>Menunggu otentikasi dari aplikasi WhatsApp di HP Anda...</span>
               </div>
 
               {/* Step-by-Step Verification Logs Console */}

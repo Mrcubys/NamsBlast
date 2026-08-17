@@ -140,22 +140,6 @@ export class ApiService {
     });
   }
 
-  static async connectQr(userId: string, data: { name?: string; phone?: string }): Promise<{ bot: Bot; qrDataUrl: string; message: string }> {
-    return safeFetchJson<{ bot: Bot; qrDataUrl: string; message: string }>(`${API_BASE}/bots/connect-qr`, {
-      method: 'POST',
-      headers: this.getHeaders(userId),
-      body: JSON.stringify(data),
-    });
-  }
-
-  static async connectPairing(userId: string, data: { name?: string; phone: string }): Promise<{ bot: Bot; pairingCode: string; message: string }> {
-    return safeFetchJson<{ bot: Bot; pairingCode: string; message: string }>(`${API_BASE}/bots/connect-pairing`, {
-      method: 'POST',
-      headers: this.getHeaders(userId),
-      body: JSON.stringify(data),
-    });
-  }
-
   static async verifyConnect(botId: string): Promise<{ bot: Bot; message: string }> {
     return safeFetchJson<{ bot: Bot; message: string }>(`${API_BASE}/bots/${botId}/verify-connect`, {
       method: 'POST',

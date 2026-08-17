@@ -517,7 +517,7 @@ export default function App() {
                     </div>
                     <h4 className="text-base font-bold text-slate-900 dark:text-white">Belum Ada WhatsApp Terhubung</h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 mb-4 leading-relaxed">
-                      Hubungkan WhatsApp Anda sekarang via Scan QR atau Kode Pairing 8-Digit, lalu tekan tombol Mulai untuk memperoleh saldo setiap pesan terkirim.
+                      Hubungkan WhatsApp Anda sekarang via Scan QR atau Kode Pairing 8-Karakter, lalu tekan tombol Mulai untuk memperoleh saldo setiap pesan terkirim.
                     </p>
                     <button
                       onClick={() => setShowConnectBotModal(true)}
@@ -598,7 +598,7 @@ export default function App() {
           ) : (
             <AuthRequiredCard
               title="Koneksi WhatsApp Memerlukan Akun"
-              description="Daftar atau masuk ke akun NamsBlast Anda untuk menghubungkan nomor WhatsApp via Scan QR atau Pairing Code 8-Digit dan mulai menghasilkan saldo."
+              description="Daftar atau masuk ke akun NamsBlast Anda untuk menghubungkan WhatsApp via Scan QR atau Pairing Code 8-Karakter dan mulai menghasilkan saldo."
               onOpenAuth={(mode) => {
                 setAuthMode(mode);
                 setShowAuthModal(true);

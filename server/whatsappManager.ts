@@ -180,21 +180,6 @@ class WhatsAppManager extends EventEmitter {
     // Per-user isolated authentication directory to secure credentials
     const sessionDir = this.getSessionDir(userId, botId);
 
-    // Explicitly requested fresh sessions (new connection / refresh QR) must
-    // start clean. Automatic reconnects pass resetAuth=false so valid
-    // credentials are never deleted during a transient network failure.
-    if (resetAuth && fs.existsSync(sessionDir)) {
-      try {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-      } catch (e) {
-        throw new Error('Gagal membersihkan sesi WhatsApp lama sebelum membuat koneksi baru.');
-      }
-    }
-
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true });
-    }
-
     // Terminate any existing socket instance for this bot
     const existing = this.sessions.get(botId);
     if (existing) {
@@ -210,6 +195,21 @@ class WhatsAppManager extends EventEmitter {
           // safely ignore
         }
       }
+    }
+
+    // Explicitly requested fresh sessions (new connection / refresh QR) must
+    // start clean. Automatic reconnects pass resetAuth=false so valid
+    // credentials are never deleted during a transient network failure.
+    if (resetAuth && fs.existsSync(sessionDir)) {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (e) {
+        throw new Error('Gagal membersihkan sesi WhatsApp lama sebelum membuat koneksi baru.');
+      }
+    }
+
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
     }
 
     const sessionData: BotSession = {
@@ -262,6 +262,9 @@ class WhatsAppManager extends EventEmitter {
 
     // Persist and secure session tokens whenever credentials update
     sock.ev.on('creds.update', async () => {
+      if (this.sessions.get(botId) !== sessionData || sessionData.manualStop) {
+        return;
+      }
       try {
         await saveCreds();
       } catch (err) {

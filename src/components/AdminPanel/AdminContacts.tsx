@@ -11,7 +11,6 @@ import {
   Clock,
   XCircle,
   Download,
-  Sparkles,
   AlertCircle,
   RefreshCw,
 } from 'lucide-react';
@@ -168,32 +167,6 @@ export const AdminContacts: React.FC<AdminContactsProps> = ({ onContactsUpdated 
     }
   };
 
-  const handleGenerateSampleContacts = async () => {
-    const sampleNames = ['Budi Santoso', 'Rina Marlina', 'Siti Aminah', 'Hendra Kusuma', 'Maya Indah', 'Fajar Pratama', 'Putri Ayu', 'Dimas Anggara', 'Eka Saputra', 'Bayu Nugroho'];
-    const dummy: Array<{ phone: string; name: string }> = [];
-
-    for (let i = 0; i < 200; i++) {
-      const prefix = ['0812', '0813', '0821', '0857', '0878', '0896', '0852'][i % 7];
-      const suffix = Math.floor(1000000 + Math.random() * 9000000);
-      dummy.push({
-        phone: `${prefix}${suffix}`,
-        name: sampleNames[i % sampleNames.length],
-      });
-    }
-
-    setUploading(true);
-    try {
-      const res = await ApiService.uploadContacts(dummy);
-      setFeedback({ type: 'success', message: `Berhasil menambahkan ${res.added} kontak demo ke antrian pending!` });
-      onContactsUpdated();
-      loadContacts();
-    } catch (e: any) {
-      setFeedback({ type: 'error', message: e.message });
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const handleDownloadSampleCsv = () => {
     const csvContent = 'nomor,nama\n081234567890,Budi Santoso\n085712345678,Siti Aminah\n087898765432,Hendra Kusuma\n089611223344,Maya Indah\n';
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -301,28 +274,18 @@ export const AdminContacts: React.FC<AdminContactsProps> = ({ onContactsUpdated 
           </div>
         </div>
 
-        {/* Quick Testing & Actions */}
+        {/* Manual Actions */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 flex flex-col justify-between shadow-xs">
           <div>
             <h4 className="text-xs sm:text-sm font-bold text-slate-900 mb-1.5 flex items-center space-x-1.5">
-              <Sparkles className="w-4 h-4 text-emerald-600" />
-              <span>Quick Test &amp; Manual Add</span>
+              <Plus className="w-4 h-4 text-emerald-600" />
+              <span>Input Kontak</span>
             </h4>
             <p className="text-xs text-slate-500 leading-relaxed">
-              Isi antrian kontak pengujian secara instan untuk mencoba blast otomatis.
+              Tambahkan nomor baru ke antrian secara manual.
             </p>
 
             <div className="mt-3.5 space-y-2">
-              <button
-                id="btn-generate-sample-contacts"
-                onClick={handleGenerateSampleContacts}
-                disabled={uploading}
-                className="w-full py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition flex items-center justify-center space-x-2"
-              >
-                <Sparkles className="w-4 h-4 text-emerald-600" />
-                <span>+ Isi 200 Kontak Demo Pending</span>
-              </button>
-
               <button
                 onClick={() => setShowManualForm(!showManualForm)}
                 className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold transition flex items-center justify-center space-x-2"
